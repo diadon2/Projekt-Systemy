@@ -22,7 +22,7 @@ static void sem_p(int semafor, int n) {
       }
    }
    else {
-      //printf("Semafor %d, %d zostal zamkniety", semafor, n);
+      printf("Semafor %d, %d zostal zamkniety\n", semafor, n);
    }
 }
 
@@ -38,19 +38,24 @@ static void sem_v(int semafor, int n) {
       exit(EXIT_FAILURE);
    }
    else {
-      //printf("Semafor %d, %d zostal otwarty\n", semafor, n);
+      printf("Semafor %d, %d zostal otwarty\n", semafor, n);
    }
 }
 
 static void usun_semafor(int semafor) {
-   int sem;
-   sem = semctl(semafor, 0, IPC_RMID);
-   if (sem == -1) {
-      perror("Blad podczas usuwania semafora");
-      exit(EXIT_FAILURE);
+   struct semid_ds sem_info;
+   if (semctl(semafor, 0, IPC_STAT, &sem_info) == -1) {
+      perror("Blad podczas uzyskiwania informacji o semaforze");
+      return;
    }
-   else {
-      //printf("Semafor %d zostal usuniety\n", semafor);
+   if (sem_info.sem_otime == 0) {
+      if (semctl(semafor, 0, IPC_RMID) == -1) {
+         perror("Blad podczas usuwania semafora");
+      } else {
+         printf("Semafor zostal usuniety\n");
+      }
+   } else {
+      printf("Semafor jest nadal w uzytku\n");
    }
 }
 
@@ -61,12 +66,6 @@ static void utworz_semafor(int* semafor, key_t key, int n) {
       exit(EXIT_FAILURE);
    }
    else {
-      //printf("Semafor %d zostal utworzony\n", *semafor);
-   }
-   for (int i = 0; i < n; i++) {
-      if (semctl(*semafor, i, SETVAL, 0) == -1) {
-         perror("Blad podczas ustawiania wartosci semafora");
-         exit(EXIT_FAILURE);
-      }
+      printf("Semafor %d zostal utworzony\n", *semafor);
    }
 }

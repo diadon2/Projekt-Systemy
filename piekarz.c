@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <signal.h>
 #include "semafory.h"
 
 #define ILOSC_PRODUKTOW 12
@@ -27,7 +28,7 @@ struct podajnik {
 struct komunikacja {
    int index;
    int ilosc;
-   char* pieczywo;
+   char pieczywo[24];
 };
 
 const char* produkty[ILOSC_PRODUKTOW] = {
@@ -37,9 +38,10 @@ const char* produkty[ILOSC_PRODUKTOW] = {
 };
 
 struct podajnik podajniki[ILOSC_PRODUKTOW];
-struct komunikacja* przestrzen;
+struct komunikacja* przestrzen = NULL;
 int pamiec;
 int sem_pam;
+pthread_t id_obsluga;
 
 int los(int min, int max){
    if (min > max) {
@@ -82,6 +84,21 @@ void dodaj_produkt(int index) {
    pthread_mutex_unlock(&podajniki[index].mutex);
 }
 
+char* odbierz_produkt(int index){
+   pthread_mutex_lock(&podajniki[index].mutex);
+   if (podajniki[index].ilosc == 0){
+      pthread_mutex_unlock(&podajniki[index].mutex);
+      return NULL;
+   }
+   char* odebrany = podajniki[index].p->pieczywo;
+   struct produkt* temp = podajniki[index].p;
+   podajniki[index].p = podajniki[index].p->n;
+   podajniki[index].ilosc--;
+   free(temp);
+   pthread_mutex_unlock(&podajniki[index].mutex);
+   return odebrany;
+}
+
 void inicjalizacja_podajnika(int index){
    podajniki[index].pojemnosc = los(9,17);
    podajniki[index].ilosc = 0;
@@ -122,33 +139,75 @@ void wypiekanie(){
 void cleanup(){
    for (int i=0; i<ILOSC_PRODUKTOW; i++){
       usun_linie(podajniki[i].p);
+      pthread_mutex_destroy(&podajniki[i].mutex);
    }
-   int odlaczenie1, odlaczenie2;
-   odlaczenie1 = shmctl(pamiec, IPC_RMID, 0);
-   odlaczenie2 = shmdt(przestrzen);
-   if (odlaczenie1 == -1 || odlaczenie2 == -1){
+   if (shmdt(przestrzen) == -1) {
       perror("Blad podczas odlaczania pamieci");
-      exit(EXIT_FAILURE);
+   }
+   else {
+      printf("Pamiec dzielona zostala odlaczona\n");
+   }
+   struct shmid_ds shm_info;
+   if (shmctl(pamiec, IPC_STAT, &shm_info) == -1) {
+      perror("Blad podczas uzyskiwaniu informacji o pamieci dzielonej");
+      return;
+   }
+   if (shm_info.shm_nattch == 0){
+      if (shmctl(pamiec, IPC_RMID, NULL) == -1) {
+         perror("Blad podczas usuwania pamiec dzielona");
+      } else {
+         printf("Pamiec dzielona zostala usunieta\n");
+      }
+   } else {
+      printf("Pamiec dzielona jest nadal w uzytku\n");
    }
    usun_semafor(sem_pam);
 }
 
 void *obsluga_klientow(void* arg){
+   printf("Watek obsluga dziala\n");
+   sem_v(sem_pam, 0);
+   int podajnik_id = -1;
+   char* produkt = NULL;
    while (1) {
-      int podajnik_id = -1;
-      sem_p(sem_pam, 2); //czekamy na sygnal od klienta, ze chce odebrac produkt
-      sem_p(sem_pam, 1); //czekamy az pamiec dzielona jest dostepna
+      printf("czeka\n");
+      sem_p(sem_pam, 1);
+      memset(przestrzen->pieczywo, 0, sizeof(przestrzen->pieczywo));
+      podajnik_id = przestrzen->index;
+      if (podajnik_id != -1) {
+         produkt = odbierz_produkt(podajnik_id);
+      }
+      else {
+         produkt = NULL;
+      }
+      if (produkt != NULL) {
+         strncpy(przestrzen->pieczywo, produkt, sizeof(przestrzen->pieczywo) - 1);
+         przestrzen->pieczywo[sizeof(przestrzen->pieczywo) - 1] = '\0';
+      }
+      sem_v(sem_pam, 2);
+   }
+}
+
+void exit_handler(int sig){
+   if (sig == SIGINT || sig == SIGTERM || sig == SIGQUIT){
+      pthread_cancel(id_obsluga);
+      pthread_join(id_obsluga, NULL);
+      cleanup();
+      exit(EXIT_SUCCESS);
    }
 }
 
 
 int main(int argc, char** argv){
-   srand(time(0));
+   signal(SIGINT, exit_handler);
+   signal(SIGTERM, exit_handler);
+   signal(SIGQUIT, exit_handler);
+   srand(time(NULL));
    for (int i=0; i<ILOSC_PRODUKTOW; i++){
       inicjalizacja_podajnika(i);
    }
    key_t key_pam = ftok(".", 'T');
-   if (pamiec = shmget(key_pam, 32, 0222|IPC_CREAT) == -1) {
+   if ((pamiec = shmget(key_pam, 32, 0666|IPC_CREAT)) == -1) {
       perror("Blad podczas tworzenia pamieci dzielonej");
       exit(EXIT_FAILURE);
    }
@@ -164,16 +223,18 @@ int main(int argc, char** argv){
       printf("Przestrzen adresowa zostala przyznana dla %d\n", pamiec);
    }
    key_t key_sem = ftok(".", 'P');
-   utworz_semafor(&sem_pam, key_sem, 2);
+   utworz_semafor(&sem_pam, key_sem, 4);
 
    int czas;
-   for (int i=0; i<10; i++) {
+   if (pthread_create(&id_obsluga, NULL, obsluga_klientow, NULL) != 0){
+      perror("Blad podczas tworzenia watku obslugi");
+      exit(EXIT_FAILURE);
+   }
+   while (1) {
       printf("Wypiekanie\n");
       czas = los(10, 50);
       wypiekanie();
       printf("\n");
-      sleep(czas);
+      sleep(5);
    }
-
-   cleanup();
 }
