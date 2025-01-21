@@ -209,7 +209,7 @@ int main(int argc, char** argv){
       inicjalizacja_podajnika(i);
    }
    key_t key_pam = ftok(".", 'T');
-   if ((pamiec = shmget(key_pam, 32, 0666|IPC_CREAT)) == -1) {
+   if ((pamiec = shmget(key_pam, sizeof(struct komunikacja), 0666|IPC_CREAT)) == -1) {
       perror("Blad podczas tworzenia pamieci dzielonej");
       exit(EXIT_FAILURE);
    }
@@ -234,7 +234,7 @@ int main(int argc, char** argv){
    }
    while (1) {
       printf("Wypiekanie\n");
-      czas = los(10, 50);
+      czas = los(10, 30);
       wypiekanie();
       printf("\n");
       sleep(czas);
