@@ -6,40 +6,25 @@
 #include <errno.h>
 
 static void sem_p(int semafor, int n) {
-   int zmien_sem;
-   struct sembuf bufor_sem;
-   bufor_sem.sem_num = n;
-   bufor_sem.sem_op = -1;
-   bufor_sem.sem_flg = 0;
-   zmien_sem=semop(semafor, &bufor_sem, 1);
-   if (zmien_sem == -1) {
+   struct sembuf bufor_sem = {n, -1, 0};
+   if (semop(semafor, &bufor_sem, 1) == -1) {
       if (errno == EINTR) {
          sem_p(semafor, n);
-      }
-      else {
+      } else {
          perror("Blad podczas zamykania semafora");
          exit(EXIT_FAILURE);
       }
    }
-   else {
-      printf("Semafor %d, %d zostal zamkniety\n", semafor, n);
-   }
+   //printf("Semafor %d, %d zostal zamkniety\n", semafor, n);
 }
 
 static void sem_v(int semafor, int n) {
-   int zmien_sem;
-   struct sembuf bufor_sem;
-   bufor_sem.sem_num = n;
-   bufor_sem.sem_op = 1;
-   bufor_sem.sem_flg = SEM_UNDO;
-   zmien_sem=semop(semafor, &bufor_sem, 1);
-   if (zmien_sem == -1) {
+   struct sembuf bufor_sem = {n, 1, 0};
+   if (semop(semafor, &bufor_sem, 1) == -1) {
       perror("Blad podczas otwierania semafora");
       exit(EXIT_FAILURE);
    }
-   else {
-      printf("Semafor %d, %d zostal otwarty\n", semafor, n);
-   }
+   //printf("Semafor %d, %d zostal otwarty\n", semafor, n);
 }
 
 static void usun_semafor(int semafor) {

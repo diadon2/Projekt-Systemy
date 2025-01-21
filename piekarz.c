@@ -142,26 +142,30 @@ void cleanup(){
       pthread_mutex_destroy(&podajniki[i].mutex);
    }
    if (shmdt(przestrzen) == -1) {
-      perror("Blad podczas odlaczania pamieci");
-   }
-   else {
-      printf("Pamiec dzielona zostala odlaczona\n");
+      perror("Blad podczas odlaczania pamieci dzielonej");
    }
    struct shmid_ds shm_info;
-   if (shmctl(pamiec, IPC_STAT, &shm_info) == -1) {
-      perror("Blad podczas uzyskiwaniu informacji o pamieci dzielonej");
-      return;
-   }
-   if (shm_info.shm_nattch == 0){
+   if (shmctl(pamiec, IPC_STAT, &shm_info) != -1 && shm_info.shm_nattch == 0) {
       if (shmctl(pamiec, IPC_RMID, NULL) == -1) {
-         perror("Blad podczas usuwania pamiec dzielona");
+         perror("Blad podczas usuwania pamieci dzielonej");
       } else {
          printf("Pamiec dzielona zostala usunieta\n");
       }
    } else {
-      printf("Pamiec dzielona jest nadal w uzytku\n");
+      perror("Blad podczas uzyskiwania informacji o pamieci dzielonej");
    }
-   usun_semafor(sem_pam);
+   struct semid_ds sem_info;
+   if (semctl(sem_pam, 0, IPC_STAT, &sem_info) == 0) {
+      if (sem_info.sem_otime == 0) {
+         if (semctl(sem_pam, 0, IPC_RMID) == -1) {
+            perror("Blad podczas usuwania semafora");
+         } else {
+            printf("Semafor usuniety.\n");
+         }
+      }
+   } else {
+      perror("Blad podczas uzyskiwania informacji o semaforze");
+   }
 }
 
 void *obsluga_klientow(void* arg){
@@ -170,7 +174,6 @@ void *obsluga_klientow(void* arg){
    int podajnik_id = -1;
    char* produkt = NULL;
    while (1) {
-      printf("czeka\n");
       sem_p(sem_pam, 1);
       memset(przestrzen->pieczywo, 0, sizeof(przestrzen->pieczywo));
       podajnik_id = przestrzen->index;
@@ -189,12 +192,11 @@ void *obsluga_klientow(void* arg){
 }
 
 void exit_handler(int sig){
-   if (sig == SIGINT || sig == SIGTERM || sig == SIGQUIT){
-      pthread_cancel(id_obsluga);
-      pthread_join(id_obsluga, NULL);
-      cleanup();
-      exit(EXIT_SUCCESS);
-   }
+   printf("Sygnal %d - koniec programu\n", sig);
+   pthread_cancel(id_obsluga);
+   pthread_join(id_obsluga, NULL);
+   cleanup();
+   exit(EXIT_SUCCESS);
 }
 
 
@@ -235,6 +237,6 @@ int main(int argc, char** argv){
       czas = los(10, 50);
       wypiekanie();
       printf("\n");
-      sleep(5);
+      sleep(czas);
    }
 }
