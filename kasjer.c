@@ -240,6 +240,10 @@ int main(){
 
 //koniec inicjalizacji
    int n_val[3] = {0, 1, 2};
+   if (pthread_create(&kasjerzy[0], NULL, Kasjer, &n_val[0]) != 0){
+      perror("Blad podczas tworzenia watku kasjera");
+      exit(EXIT_FAILURE);
+   }
    sem_v(sem_k, 0); //otwiera semafor dostepu do pamieci dzielonej kasjer-klient uzywanej w programie klienta
    while (1) { //zbiera informacje o nowych klientach oraz wychodzacych klientach i na ich podstawie otwiera/zamyka kasy
       if (msgrcv(komid, &msg, sizeof(msg) - sizeof(long), 1, 0) == -1) {
