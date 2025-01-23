@@ -8,10 +8,12 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/msg.h>
 #include <signal.h>
 #include "semafory.h"
 
 #define ILOSC_PRODUKTOW 12
+#define CZAS_WYPIEKANIA 30
 
 struct produkt {
    char* pieczywo;
@@ -29,6 +31,11 @@ struct komunikacja {
    int index;
    int ilosc;
    char pieczywo[24];
+}; //struktura do komunikacji podajnikow z innymi procesami
+
+struct komunikat {
+    long mtype;
+    int status;
 };
 
 const char* produkty[ILOSC_PRODUKTOW] = {
@@ -39,9 +46,15 @@ const char* produkty[ILOSC_PRODUKTOW] = {
 
 struct podajnik podajniki[ILOSC_PRODUKTOW];
 struct komunikacja* przestrzen = NULL;
+int raport[ILOSC_PRODUKTOW];
 int pamiec;
 int sem_pam;
+int sem_kier;
+int id_komunikat;
 pthread_t id_obsluga;
+int running = 1;
+int otwarcie = 0;
+int inwent = 0;
 
 int los(int min, int max){
    if (min > max) {
@@ -80,6 +93,7 @@ void dodaj_produkt(int index) {
       temp->n = new;
    }
    podajniki[index].ilosc++;
+   raport[index]++;
    printf("Dodano produkt na podajnik %d\n", index);
    pthread_mutex_unlock(&podajniki[index].mutex);
 }
@@ -106,15 +120,17 @@ void inicjalizacja_podajnika(int index){
    pthread_mutex_init(&podajniki[index].mutex, NULL);
 }
 
-void usun_linie(struct produkt* head){
+void usun_linie(struct produkt* head, int index){
    if (head == NULL) return;
+   pthread_mutex_lock(&podajniki[index].mutex);
    struct produkt* temp = head;
    while (head != NULL){
       temp = head->n;
-      free(head->pieczywo);
-      free(head);
+      if (head->pieczywo) free(head->pieczywo);
+      if (head) free(head);
       head = temp;
    }
+   pthread_mutex_unlock(&podajniki[index].mutex);
 }
 
 void wypiekanie(){
@@ -138,52 +154,31 @@ void wypiekanie(){
 
 void cleanup(){
    for (int i=0; i<ILOSC_PRODUKTOW; i++){
-      usun_linie(podajniki[i].p);
+      usun_linie(podajniki[i].p, i);
       pthread_mutex_destroy(&podajniki[i].mutex);
    }
    if (shmdt(przestrzen) == -1) {
       perror("Blad podczas odlaczania pamieci dzielonej");
    }
-   struct shmid_ds shm_info;
-   if (shmctl(pamiec, IPC_STAT, &shm_info) != -1 && shm_info.shm_nattch == 0) {
-      if (shmctl(pamiec, IPC_RMID, NULL) == -1) {
-         perror("Blad podczas usuwania pamieci dzielonej");
-      } else {
-         printf("Pamiec dzielona zostala usunieta\n");
-      }
-   } else {
-      perror("Blad podczas uzyskiwania informacji o pamieci dzielonej");
-   }
-   struct semid_ds sem_info;
-   if (semctl(sem_pam, 0, IPC_STAT, &sem_info) == 0) {
-      if (sem_info.sem_otime == 0) {
-         if (semctl(sem_pam, 0, IPC_RMID) == -1) {
-            perror("Blad podczas usuwania semafora");
-         } else {
-            printf("Semafor usuniety.\n");
-         }
-      }
-   } else {
-      perror("Blad podczas uzyskiwania informacji o semaforze");
-   }
 }
 
-void *obsluga_klientow(void* arg){
+void *obsluga_klientow(void* arg){ //watek obsluga_klientow zarzadza odbieraniem produktow z podajnikow
    printf("Watek obsluga dziala\n");
-   sem_v(sem_pam, 0);
+   sem_v(sem_pam, 0); //obsluga dostepu do podajnikow dziala
    int podajnik_id = -1;
    char* produkt = NULL;
-   while (1) {
-      sem_p(sem_pam, 1);
-      memset(przestrzen->pieczywo, 0, sizeof(przestrzen->pieczywo));
-      podajnik_id = przestrzen->index;
-      if (podajnik_id != -1) {
+   while (running) {
+      sem_p(sem_pam, 1); //czekamy na sygnal do dzialania lub konca programu
+      if (running == 0) break;
+      memset(przestrzen->pieczywo, 0, sizeof(przestrzen->pieczywo)); //robimy miejsce na pamieci dzielonej
+      podajnik_id = przestrzen->index; //zbieramy produkt ktory chcemy odebrac
+      if (podajnik_id > -1 && podajnik_id < (ILOSC_PRODUKTOW + 1)) {
          produkt = odbierz_produkt(podajnik_id);
       }
       else {
          produkt = NULL;
       }
-      if (produkt != NULL) {
+      if (produkt != NULL) { //jezeli znalezlismy produkt to wrzucamy go na pamiec dzielona
          strncpy(przestrzen->pieczywo, produkt, sizeof(przestrzen->pieczywo) - 1);
          przestrzen->pieczywo[sizeof(przestrzen->pieczywo) - 1] = '\0';
       }
@@ -191,11 +186,40 @@ void *obsluga_klientow(void* arg){
    }
 }
 
+void inwentaryzacja(int sig){
+   printf("Sygnal %d - inwentaryzacja po zamnkeciu\n", sig);
+   inwent = 1;
+}
+
+void otwieranie_zamykanie(int sig){
+   if (otwarcie == 1){ //zamykanie
+      if (inwent == 1){
+         for (int i=0; i<ILOSC_PRODUKTOW; i++) printf("Ilosc wyprodukowanych %s: %d\n", produkty[i], raport[i]);
+      }
+      otwarcie = 0;
+      sem_p(sem_kier, 1);
+      for (int i=0; i<ILOSC_PRODUKTOW; i++){
+         usun_linie(podajniki[i].p, i);
+      }
+   } else { //otwieranie
+      for (int i=0; i<ILOSC_PRODUKTOW; i++) {
+         raport[i] = 0;
+         podajniki[i].p = NULL;
+      }
+      otwarcie = 1;
+   }
+}
 void exit_handler(int sig){
    printf("Sygnal %d - koniec programu\n", sig);
-   pthread_cancel(id_obsluga);
+   printf("exit - running\n");
+   running = 0;
+   printf("exit - sem_pam, 1\n");
+   sem_v(sem_pam, 1);
+   printf("exit - pthread join\n");
    pthread_join(id_obsluga, NULL);
+   printf("exit - cleanup\n");
    cleanup();
+   sem_v(sem_kier, 1);
    exit(EXIT_SUCCESS);
 }
 
@@ -203,8 +227,11 @@ void exit_handler(int sig){
 int main(int argc, char** argv){
    signal(SIGINT, exit_handler);
    signal(SIGTERM, exit_handler);
-   signal(SIGQUIT, exit_handler);
+   signal(SIGUSR1, inwentaryzacja);
+   signal(SIGUSR2, otwieranie_zamykanie);
+
    srand(time(NULL));
+
    for (int i=0; i<ILOSC_PRODUKTOW; i++){
       inicjalizacja_podajnika(i);
    }
@@ -226,17 +253,35 @@ int main(int argc, char** argv){
    }
    key_t key_sem = ftok(".", 'P');
    utworz_semafor(&sem_pam, key_sem, 4);
+   key_t key_semkier = ftok(".", 'R');
+   utworz_semafor(&sem_kier, key_semkier, 5);
+   key_t key_mkom = ftok(".", 'M');
+   id_komunikat = msgget(key_mkom, IPC_CREAT | 0666);
+   if (id_komunikat == -1) {
+      perror("Blad przy tworzeniu kolejki komunikatow");
+      exit(EXIT_FAILURE);
+   }
+//koniec inicjalizacji
+   sem_p(sem_kier, 1);
+   struct komunikat msg;
+   msg.mtype = 1;
+   msg.status = getpid(); //wiadomosc dla kierownika
+   if (msgsnd(id_komunikat, &msg, sizeof(msg) - sizeof(long), 0) == -1) {
+      perror("Blad przy wysylaniu komunikatu");
+      exit(EXIT_FAILURE);
+   }
+   printf("Program piekarz wyslal komunikat: %d\n", msg.status);
 
-   int czas;
    if (pthread_create(&id_obsluga, NULL, obsluga_klientow, NULL) != 0){
       perror("Blad podczas tworzenia watku obslugi");
       exit(EXIT_FAILURE);
    }
+
    while (1) {
-      printf("Wypiekanie\n");
-      czas = los(10, 30);
-      wypiekanie();
-      printf("\n");
-      sleep(czas);
+      while (otwarcie) { //co okreslony czas wypieka produkty i dodaje do podajnikow
+         wypiekanie();
+         sleep(CZAS_WYPIEKANIA);
+         printf("\n");
+      }
    }
 }
