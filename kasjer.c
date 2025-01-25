@@ -172,6 +172,7 @@ void exit_handler(int sig){
    for (int i=0; i<3; i++){
       if (aktywnosc[i]) {
          sem_v(sem_k, (i * 4) + 3);
+         sem_v(sem_k, (i * 4) + 2);
          pthread_join(kasjerzy[i], NULL);
          aktywnosc[i] = 0;
       }

@@ -181,23 +181,28 @@ void* zbieranie_pid_klientow(void* arg){
       } else if (wiad.status < 0) { //usuwamy element z tablicy
          ilosc_klientow--;
          last = pid_klientow[ilosc_klientow];
-         realloc_ptr = realloc(pid_klientow, sizeof(int) * ilosc_klientow);
-         if (realloc_ptr == NULL) {
-            perror("Blad przy alokacji pamieci");
-            exit(EXIT_FAILURE);
-         }
-         pid_klientow = realloc_ptr;
-         if (last != (-wiad.status)) {
-            for (int i=0; i<ilosc_klientow; i++) {
-               if (pid_klientow[i] == (-wiad.status)) {
-                  pid_klientow[i] = last;
-                  i = ilosc_klientow;
+         if (ilosc_klientow > 0) {
+            realloc_ptr = realloc(pid_klientow, sizeof(int) * ilosc_klientow);
+            if (realloc_ptr == NULL) {
+               perror("Blad przy alokacji pamieci");
+               exit(EXIT_FAILURE);
+            }
+            pid_klientow = realloc_ptr;
+            if (last != (-wiad.status)) {
+               for (int i=0; i<ilosc_klientow; i++) {
+                  if (pid_klientow[i] == (-wiad.status)) {
+                     pid_klientow[i] = last;
+                     i = ilosc_klientow;
+                  }
                }
             }
+         } else {
+            free(pid_klientow);
+            pid_klientow = NULL;
          }
       }
    }
-   free(pid_klientow);
+   if (pid_klientow) free(pid_klientow);
    return NULL;
 }
 

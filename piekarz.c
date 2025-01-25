@@ -283,5 +283,6 @@ int main(int argc, char** argv){
          sleep(CZAS_WYPIEKANIA);
          printf("\n");
       }
+   sleep(1);
    }
 }

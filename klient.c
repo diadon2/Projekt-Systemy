@@ -131,6 +131,13 @@ int wybierz_kase(int* miejsce){
 }
 
 void klient_cleanup(){
+   struct komunikat msg;
+   msg.mtype = 1;
+   msg.status = -getpid(); //wiadomosc dla kierownika
+   if (msgsnd(id_komunikat, &msg, sizeof(msg) - sizeof(long), 0) == -1) {
+      perror("Blad przy wysylaniu komunikatu");
+      exit(EXIT_FAILURE);
+   }
    if (shmdt(przestrzen) == -1) {
       perror("Blad podczas odlaczania pamieci");
    }
@@ -461,6 +468,7 @@ int main(int argc, char** argv){
                   break;
                }
                sem_v(sem_pam, 3);
+               sleep(1);
             }
             sem_p(sem_pam, 3);
             info->liczba_klientow++;
@@ -689,6 +697,6 @@ int main(int argc, char** argv){
             break;
       }
    }
+   sleep(1);
    }
 }
-
