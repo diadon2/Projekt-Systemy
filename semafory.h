@@ -7,18 +7,18 @@
 
 static void sem_p(int semafor, int n) {
    struct sembuf bufor_sem = {n, -1, 0};
-   if (semop(semafor, &bufor_sem, 1) == -1) {
-      if (errno == EINTR) {
-         sem_p(semafor, n);
-      } else {
-         perror("Blad podczas zamykania semafora");
-         exit(EXIT_FAILURE);
-      }
+   while (semop(semafor, &bufor_sem, 1) == -1) {
+      if (errno == EINTR) continue;
+      perror("Blad podczas zamykania semafora");
+      exit(EXIT_FAILURE);
    }
    //printf("Semafor %d, %d zostal zamkniety\n", semafor, n);
 }
 
 static void sem_v(int semafor, int n) {
+   if (semctl(semafor, n, GETVAL) == 1) {
+      return;
+   }
    struct sembuf bufor_sem = {n, 1, 0};
    if (semop(semafor, &bufor_sem, 1) == -1) {
       perror("Blad podczas otwierania semafora");

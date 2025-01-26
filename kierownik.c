@@ -30,18 +30,17 @@ struct komunikat {
     int status;
 };
 
-struct komunikacja {
+struct st_podajnik {
    int index;
-   int ilosc;
    char pieczywo[24];
 }; //struktura do komunikacji podajnikow z innymi procesami
 
 int raport[ILOSC_PRODUKTOW];
-int id_komunikat;
+int kom_kier;
 int sem_kier;
-int sem_pam;
-int pamiec;
-struct komunikacja* przestrzen = NULL;
+int sem_podajnik;
+int pam_podajnik;
+struct st_podajnik* przestrzen_podajnik = NULL;
 pthread_t sym_czas;
 pthread_t zbieranie_pid;
 int otwarcie = 0;
@@ -66,6 +65,7 @@ void inwentaryzacja() {
 }
 
 void zamknij_piekarnie() {
+   printf("Zamykanie\n");
    otwarcie = 0;
    for (int i=0; i<ilosc_klientow; i++) kill(pid_klientow[i], SIGUSR2);
    kill(pid_piekarz, SIGUSR2);
@@ -74,16 +74,16 @@ void zamknij_piekarnie() {
    if (inwent) {
       int i = 0;
       while (i < ILOSC_PRODUKTOW) {
-         sem_p(sem_pam, 0);
-         przestrzen->index = i;
-         sem_v(sem_pam, 1);
-         sem_p(sem_pam, 2);
-         if (przestrzen->pieczywo[0] != '\0'){
+         sem_p(sem_podajnik, 0);
+         przestrzen_podajnik->index = i;
+         sem_v(sem_podajnik, 1);
+         sem_p(sem_podajnik, 2);
+         if (przestrzen_podajnik->pieczywo[0] != '\0'){
             raport[i]++;
          } else {
             i++;
          }
-         sem_v(sem_pam, 0);
+         sem_v(sem_podajnik, 0);
       }
       printf("Inwentaryzacja:\n");
       for (i=0; i<ILOSC_PRODUKTOW; i++){
@@ -94,6 +94,7 @@ void zamknij_piekarnie() {
 }
 
 void otworz_piekarnie() {
+   printf("Otwieranie\n");
    otwarcie = 1;
    kill(pid_piekarz, SIGUSR2);
    kill(pid_kasjer, SIGUSR2);
@@ -109,23 +110,23 @@ void cleanup() {
    } else {
       printf("Semafor usuniety\n");
    }
-   if (msgctl(id_komunikat, 0, IPC_RMID) == -1) {
+   if (msgctl(kom_kier, 0, IPC_RMID) == -1) {
       perror("Blad podczas usuwania kolejki komunikatow");
    } else {
       printf("Kolejka komunikatow usunieta\n");
    }
-   if (semctl(sem_pam, 0, IPC_RMID) == -1) {
+   if (semctl(sem_podajnik, 0, IPC_RMID) == -1) {
       perror("Blad podczas usuwania semafora");
    } else {
       printf("Semafor usuniety\n");
    }
-   if (shmdt(przestrzen) == -1) {
+   if (shmdt(przestrzen_podajnik) == -1) {
       perror("Blad podczas odlaczania pamieci");
    }
    else {
-      printf("Pamiec dzielona zostala odlaczona od klienta %d\n", getpid());
+      printf("Pamiec dzielona zostala odlaczona\n");
    }
-   if (shmctl(pamiec, IPC_RMID, NULL) == -1) {
+   if (shmctl(pam_podajnik, IPC_RMID, NULL) == -1) {
       perror("Blad podczas usuwania pamieci dzielonej");
    } else {
       printf("Pamiec dzielona zostala usunieta\n");
@@ -142,13 +143,8 @@ void exit_handler(int sig) {
    kill(pid_klient, sig);
    sem_p(sem_kier, 3);
    run = 0;
-   struct komunikat wiad;
-   wiad.mtype = 1;
-   wiad.status = 0;
-   if (msgsnd(id_komunikat, &wiad, sizeof(wiad) - sizeof(long), 0) == -1){
-      perror("Blad przy wysylaniu komunikatu");
-      exit(EXIT_FAILURE);
-   }
+   pthread_cancel(sym_czas);
+   pthread_cancel(zbieranie_pid);
    pthread_join(sym_czas, NULL);
    pthread_join(zbieranie_pid, NULL);
    cleanup();
@@ -163,8 +159,9 @@ void* zbieranie_pid_klientow(void* arg){
    int* realloc_ptr;
    while (run) {
       sem_v(sem_kier, 0);
-      if (msgrcv(id_komunikat, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
-         perror("Blad przy odbieraniu komunikatu");
+      while (msgrcv(kom_kier, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
+         if (errno == EINTR) continue;
+         perror("Error receiving message");
          exit(EXIT_FAILURE);
       }
       if (run == 0) break;
@@ -220,6 +217,7 @@ void* symulacja_czasu (void* arg){
          otworz_piekarnie();
       }
       if (czas == 1440) czas = 0; //polnoc
+      if (!run) break;
    }
    return NULL;
 }
@@ -229,58 +227,64 @@ int godzina(){
 }
 
 int main() {
-   signal(SIGINT, exit_handler);
-   signal(SIGTERM, exit_handler);
+   struct sigaction sa;
+   sa.sa_flags = 0;
+   sa.sa_handler = exit_handler;
+   sigaction(SIGTERM, &sa, NULL);
+   sigaction(SIGINT, &sa, NULL);
 
-   key_t key_semkier = ftok(".", 'R');
-   utworz_semafor(&sem_kier, key_semkier, 5);
-   key_t key_mkom = ftok(".", 'M');
-   id_komunikat = msgget(key_mkom, IPC_CREAT | 0666);
-   if (id_komunikat == -1) {
+   key_t key_sem_kier = ftok(".", 'R');
+   utworz_semafor(&sem_kier, key_sem_kier, 5);
+   key_t key_kom_kier = ftok(".", 'M');
+   kom_kier = msgget(key_kom_kier, IPC_CREAT | 0666);
+   if (kom_kier == -1) {
       perror("Blad przy tworzeniu kolejki komunikatow");
       exit(EXIT_FAILURE);
    }
    for (int i=0; i<ILOSC_PRODUKTOW; i++){
       raport[i] = 0;
    }
-   key_t key_pam = ftok(".", 'T');
-   if ((pamiec = shmget(key_pam, sizeof(struct komunikacja), 0666|IPC_CREAT)) == -1) {
+   key_t key_pam_podajnik = ftok(".", 'T');
+   if ((pam_podajnik = shmget(key_pam_podajnik, sizeof(struct st_podajnik), 0666|IPC_CREAT)) == -1) {
       perror("Blad podczas tworzenia pamieci dzielonej");
       exit(EXIT_FAILURE);
    }
    else {
-      printf("Pamiec dzielona %d zostala utworzona\n", pamiec);
+      printf("Pamiec dzielona %d zostala utworzona\n", pam_podajnik);
    }
-   przestrzen = (struct komunikacja*)shmat(pamiec, NULL, 0);
-   if (przestrzen == (struct komunikacja*)(-1)){
+   przestrzen_podajnik = (struct st_podajnik*)shmat(pam_podajnik, NULL, 0);
+   if (przestrzen_podajnik == (struct st_podajnik*)(-1)){
       perror("Blad podczas przydzielania adresu dla pamieci");
       exit(EXIT_FAILURE);
    }
    else {
-      printf("Przestrzen adresowa zostala przyznana dla %d\n", pamiec);
+      printf("Przestrzen adresowa zostala przyznana dla %d\n", pam_podajnik);
    }
-   key_t key_sem = ftok(".", 'P');
-   utworz_semafor(&sem_pam, key_sem, 4);
+   key_t key_sem_podajnik = ftok(".", 'P');
+   utworz_semafor(&sem_podajnik, key_sem_podajnik, 4);
 
 //koniec inicjalizacji
    struct komunikat wiad;
    sem_v(sem_kier, 1); //zbiera pid piekarza
-   if (msgrcv(id_komunikat, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
-      perror("Blad przy odbieraniu komunikatu");
+   while (msgrcv(kom_kier, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
+      if (errno == EINTR) continue;
+      perror("Error receiving message");
       exit(EXIT_FAILURE);
    }
    printf("Kierownik: Odebrano komunikat od piekarza: %d\n", wiad.status);
    pid_piekarz = wiad.status;
    sem_v(sem_kier, 2); //zbiera pid kasjera
-   if (msgrcv(id_komunikat, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
-      perror("Blad przy odbieraniu komunikatu");
+   while (msgrcv(kom_kier, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
+      if (errno == EINTR) continue;
+      perror("Error receiving message");
       exit(EXIT_FAILURE);
    }
    printf("Kierownik: Odebrano komunikat od kasjera: %d\n", wiad.status);
    pid_kasjer = wiad.status;
    sem_v(sem_kier, 3); //zbiera pid klienta (proces macierzysty)
-   if (msgrcv(id_komunikat, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
-      perror("Blad przy odbieraniu komunikatu");
+   while (msgrcv(kom_kier, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
+      if (errno == EINTR) continue;
+      perror("Error receiving message");
       exit(EXIT_FAILURE);
    }
    printf("Kierownik: Odebrano komunikat od klienta: %d\n", wiad.status);

@@ -27,9 +27,8 @@ struct podajnik {
    pthread_mutex_t mutex;
 };
 
-struct komunikacja {
+struct st_podajnik {
    int index;
-   int ilosc;
    char pieczywo[24];
 }; //struktura do komunikacji podajnikow z innymi procesami
 
@@ -45,12 +44,12 @@ const char* produkty[ILOSC_PRODUKTOW] = {
 };
 
 struct podajnik podajniki[ILOSC_PRODUKTOW];
-struct komunikacja* przestrzen = NULL;
+struct st_podajnik* przestrzen_podajnik = NULL;
 int raport[ILOSC_PRODUKTOW];
-int pamiec;
-int sem_pam;
+int pam_podajnik;
+int sem_podajnik;
 int sem_kier;
-int id_komunikat;
+int kom_kier;
 pthread_t id_obsluga;
 int running = 1;
 int otwarcie = 0;
@@ -75,12 +74,14 @@ void dodaj_produkt(int index) {
    struct produkt* new = malloc(sizeof(struct produkt));
    if (!new) {
       perror("Blad alokacji pamieci dla struktury produkt");
+      pthread_mutex_unlock(&podajniki[index].mutex);
       exit(EXIT_FAILURE);
    }
    new->pieczywo = malloc(strlen(produkty[index]) + 1);
    if (!new->pieczywo){
       printf("Blad alokacji pamieci dla pieczywa");
       free(new);
+      pthread_mutex_unlock(&podajniki[index].mutex);
       exit(EXIT_FAILURE);
    }
    strcpy(new->pieczywo, produkty[index]);
@@ -108,7 +109,7 @@ char* odbierz_produkt(int index){
    struct produkt* temp = podajniki[index].p;
    podajniki[index].p = podajniki[index].p->n;
    podajniki[index].ilosc--;
-   free(temp);
+   if (temp) free(temp);
    pthread_mutex_unlock(&podajniki[index].mutex);
    return odebrany;
 }
@@ -130,6 +131,8 @@ void usun_linie(struct produkt* head, int index){
       if (head) free(head);
       head = temp;
    }
+   podajniki[index].p = NULL;
+   podajniki[index].ilosc = 0;
    pthread_mutex_unlock(&podajniki[index].mutex);
 }
 
@@ -154,24 +157,24 @@ void wypiekanie(){
 
 void cleanup(){
    for (int i=0; i<ILOSC_PRODUKTOW; i++){
-      usun_linie(podajniki[i].p, i);
+      if (podajniki[i].p) usun_linie(podajniki[i].p, i);
       pthread_mutex_destroy(&podajniki[i].mutex);
    }
-   if (shmdt(przestrzen) == -1) {
+   if (shmdt(przestrzen_podajnik) == -1) {
       perror("Blad podczas odlaczania pamieci dzielonej");
    }
 }
 
 void *obsluga_klientow(void* arg){ //watek obsluga_klientow zarzadza odbieraniem produktow z podajnikow
    printf("Watek obsluga dziala\n");
-   sem_v(sem_pam, 0); //obsluga dostepu do podajnikow dziala
+   sem_v(sem_podajnik, 0); //obsluga dostepu do podajnikow dziala
    int podajnik_id = -1;
    char* produkt = NULL;
    while (running) {
-      sem_p(sem_pam, 1); //czekamy na sygnal do dzialania lub konca programu
+      sem_p(sem_podajnik, 1); //czekamy na sygnal do dzialania lub konca programu
       if (running == 0) break;
-      memset(przestrzen->pieczywo, 0, sizeof(przestrzen->pieczywo)); //robimy miejsce na pamieci dzielonej
-      podajnik_id = przestrzen->index; //zbieramy produkt ktory chcemy odebrac
+      memset(przestrzen_podajnik->pieczywo, 0, sizeof(przestrzen_podajnik->pieczywo)); //robimy miejsce na pamieci dzielonej
+      podajnik_id = przestrzen_podajnik->index; //zbieramy produkt ktory chcemy odebrac
       if (podajnik_id > -1 && podajnik_id < (ILOSC_PRODUKTOW + 1)) {
          produkt = odbierz_produkt(podajnik_id);
       }
@@ -179,10 +182,12 @@ void *obsluga_klientow(void* arg){ //watek obsluga_klientow zarzadza odbieraniem
          produkt = NULL;
       }
       if (produkt != NULL) { //jezeli znalezlismy produkt to wrzucamy go na pamiec dzielona
-         strncpy(przestrzen->pieczywo, produkt, sizeof(przestrzen->pieczywo) - 1);
-         przestrzen->pieczywo[sizeof(przestrzen->pieczywo) - 1] = '\0';
+         strncpy(przestrzen_podajnik->pieczywo, produkt, sizeof(przestrzen_podajnik->pieczywo) - 1);
+         przestrzen_podajnik->pieczywo[sizeof(przestrzen_podajnik->pieczywo) - 1] = '\0';
+         free(produkt);
       }
-      sem_v(sem_pam, 2);
+      if (running == 0) break;
+      sem_v(sem_podajnik, 2);
    }
 }
 
@@ -193,6 +198,7 @@ void inwentaryzacja(int sig){
 
 void otwieranie_zamykanie(int sig){
    if (otwarcie == 1){ //zamykanie
+      printf("Sygnal %d - zamykanie\n", sig);
       if (inwent == 1){
          for (int i=0; i<ILOSC_PRODUKTOW; i++) printf("Ilosc wyprodukowanych %s: %d\n", produkty[i], raport[i]);
       }
@@ -202,22 +208,18 @@ void otwieranie_zamykanie(int sig){
          usun_linie(podajniki[i].p, i);
       }
    } else { //otwieranie
+      printf("Sygnal %d - otwieranie\n", sig);
       for (int i=0; i<ILOSC_PRODUKTOW; i++) {
          raport[i] = 0;
-         podajniki[i].p = NULL;
       }
       otwarcie = 1;
    }
 }
 void exit_handler(int sig){
    printf("Sygnal %d - koniec programu\n", sig);
-   printf("exit - running\n");
    running = 0;
-   printf("exit - sem_pam, 1\n");
-   sem_v(sem_pam, 1);
-   printf("exit - pthread join\n");
+   sem_v(sem_podajnik, 1);
    pthread_join(id_obsluga, NULL);
-   printf("exit - cleanup\n");
    cleanup();
    sem_v(sem_kier, 1);
    exit(EXIT_SUCCESS);
@@ -225,39 +227,51 @@ void exit_handler(int sig){
 
 
 int main(int argc, char** argv){
-   signal(SIGINT, exit_handler);
-   signal(SIGTERM, exit_handler);
-   signal(SIGUSR1, inwentaryzacja);
-   signal(SIGUSR2, otwieranie_zamykanie);
+   struct sigaction sa;
+   sigset_t block_mask, orig_mask;
+   sigemptyset(&sa.sa_mask);
+   sa.sa_flags = 0;
+   sa.sa_handler = exit_handler;
+   sigaction(SIGTERM, &sa, NULL);
+   sigaction(SIGINT, &sa, NULL);
+   sa.sa_handler = inwentaryzacja;
+   sigaction(SIGUSR1, &sa, NULL);
+   sa.sa_handler = otwieranie_zamykanie;
+   sigaction(SIGUSR2, &sa, NULL);
+   sigemptyset(&block_mask);
+   sigaddset(&block_mask, SIGUSR1);
+   sigaddset(&block_mask, SIGUSR2);
+   sigaddset(&block_mask, SIGINT);
+   sigaddset(&block_mask, SIGTERM);
 
    srand(time(NULL));
 
    for (int i=0; i<ILOSC_PRODUKTOW; i++){
       inicjalizacja_podajnika(i);
    }
-   key_t key_pam = ftok(".", 'T');
-   if ((pamiec = shmget(key_pam, sizeof(struct komunikacja), 0666|IPC_CREAT)) == -1) {
+   key_t key_pam_podajnik = ftok(".", 'T');
+   if ((pam_podajnik = shmget(key_pam_podajnik, sizeof(struct st_podajnik), 0666|IPC_CREAT)) == -1) {
       perror("Blad podczas tworzenia pamieci dzielonej");
       exit(EXIT_FAILURE);
    }
    else {
-      printf("Pamiec dzielona %d zostala utworzona\n", pamiec);
+      printf("Pamiec dzielona %d zostala utworzona\n", pam_podajnik);
    }
-   przestrzen = (struct komunikacja*)shmat(pamiec, NULL, 0);
-   if (przestrzen == (struct komunikacja*)(-1)){
+   przestrzen_podajnik = (struct st_podajnik*)shmat(pam_podajnik, NULL, 0);
+   if (przestrzen_podajnik == (struct st_podajnik*)(-1)){
       perror("Blad podczas przydzielania adresu dla pamieci");
       exit(EXIT_FAILURE);
    }
    else {
-      printf("Przestrzen adresowa zostala przyznana dla %d\n", pamiec);
+      printf("Przestrzen adresowa zostala przyznana dla %d\n", pam_podajnik);
    }
-   key_t key_sem = ftok(".", 'P');
-   utworz_semafor(&sem_pam, key_sem, 4);
-   key_t key_semkier = ftok(".", 'R');
-   utworz_semafor(&sem_kier, key_semkier, 5);
-   key_t key_mkom = ftok(".", 'M');
-   id_komunikat = msgget(key_mkom, IPC_CREAT | 0666);
-   if (id_komunikat == -1) {
+   key_t key_sem_podajnik = ftok(".", 'P');
+   utworz_semafor(&sem_podajnik, key_sem_podajnik, 4);
+   key_t key_sem_kier = ftok(".", 'R');
+   utworz_semafor(&sem_kier, key_sem_kier, 5);
+   key_t key_kom_kier = ftok(".", 'M');
+   kom_kier = msgget(key_kom_kier, IPC_CREAT | 0666);
+   if (kom_kier == -1) {
       perror("Blad przy tworzeniu kolejki komunikatow");
       exit(EXIT_FAILURE);
    }
@@ -266,7 +280,7 @@ int main(int argc, char** argv){
    struct komunikat msg;
    msg.mtype = 1;
    msg.status = getpid(); //wiadomosc dla kierownika
-   if (msgsnd(id_komunikat, &msg, sizeof(msg) - sizeof(long), 0) == -1) {
+   if (msgsnd(kom_kier, &msg, sizeof(msg) - sizeof(long), 0) == -1) {
       perror("Blad przy wysylaniu komunikatu");
       exit(EXIT_FAILURE);
    }
@@ -279,7 +293,9 @@ int main(int argc, char** argv){
 
    while (1) {
       while (otwarcie) { //co okreslony czas wypieka produkty i dodaje do podajnikow
+         sigprocmask(SIG_BLOCK, &block_mask, &orig_mask);
          wypiekanie();
+         sigprocmask(SIG_SETMASK, &orig_mask, NULL);
          sleep(CZAS_WYPIEKANIA);
          printf("\n");
       }
