@@ -276,7 +276,7 @@ int main(int argc, char** argv){
    key_t key_sem_kier = ftok(".", 'R');
    utworz_semafor(&sem_kier, key_sem_kier, 5);
    key_t key_kom_kier = ftok(".", 'M');
-   kom_kier = msgget(key_kom_kier, IPC_CREAT | 0666);
+   kom_kier = msgget(key_kom_kier, IPC_CREAT | 0222);
    if (kom_kier == -1) {
       perror("Blad przy tworzeniu kolejki komunikatow");
       exit(EXIT_FAILURE);

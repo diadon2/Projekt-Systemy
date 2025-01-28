@@ -92,7 +92,7 @@ void *Kasjer(void* arg){ //watek kasy, przekazuje argument n - index kasy
       if (aktywne_kasy[id_kasa] == 0) break; //koniec pracy kasy
    }
    printf("Kasa %d zamknieta\n", id_kasa);
-   aktywnosc[id_kasa] = 0;
+   aktywnosc[id_kasa] = 2;
    return NULL;
 }
 
@@ -134,6 +134,8 @@ void otwieranie_zamykanie(int sig){
       aktywne_kasy[1] = 0;
       aktywne_kasy[2] = 0;
       otwarcie = 1;
+      aktywnosc[1] = 0;
+      aktywnosc[2] = 0;
       if (pthread_create(&kasjerzy[0], NULL, Kasjer, &n_val[0]) != 0){
          perror("Blad podczas tworzenia watku kasjera");
          exit(EXIT_FAILURE);
@@ -170,7 +172,7 @@ int main(){
 
    srand(time(NULL));
    key_t key_sem_kasa = ftok(".", 'K');
-   utworz_semafor(&sem_kasa, key_sem_kasa, 15);
+   utworz_semafor(&sem_kasa, key_sem_kasa, 19);
    key_t key_kol = ftok(".", 'L');
    if ((pam_kasa = shmget(key_kol, sizeof(struct st_kasa), 0666|IPC_CREAT)) == -1) {
       perror("Blad podczas tworzenia pamieci dzielonej");
@@ -204,7 +206,7 @@ int main(){
    key_t key_sem_kier = ftok(".", 'R');
    utworz_semafor(&sem_kier, key_sem_kier, 5);
    key_t key_kom_kier = ftok(".", 'M');
-   kom_kier = msgget(key_kom_kier, IPC_CREAT | 0666);
+   kom_kier = msgget(key_kom_kier, IPC_CREAT | 0222);
    if (kom_kier == -1) {
       perror("Blad przy tworzeniu kolejki komunikatow");
       exit(EXIT_FAILURE);
@@ -218,6 +220,9 @@ int main(){
       exit(EXIT_FAILURE);
    }
    printf("Program kasjer wyslal komunikat: %d\n", msg.status);
+   for (int i=0; i<ILOSC_PRODUKTOW; i++){
+      printf("Cena %s: %d\n", produkty[i], ceny[i]);
+}
 
 //koniec inicjalizacji
    sem_v(sem_kasa, 0); //otwiera semafor dostepu do pamieci dzielonej kasjer-klient uzywanej w programie klienta
@@ -232,16 +237,20 @@ int main(){
       switch (msg.status){
          case 2: //otwieramy kase 2
             aktywne_kasy[1] = 1;
-            if (pthread_create(&kasjerzy[1], NULL, Kasjer, &n_val[1]) != 0){
-               perror("Blad podczas tworzenia watku kasjera");
-               exit(EXIT_FAILURE);
+            if (aktywnosc[1] == 0){
+               if (pthread_create(&kasjerzy[1], NULL, Kasjer, &n_val[1]) != 0){
+                  perror("Blad podczas tworzenia watku kasjera");
+                  exit(EXIT_FAILURE);
+               }
             }
             break;
          case 3: //otwieramy kase 3
             aktywne_kasy[2] = 1;
-            if (pthread_create(&kasjerzy[2], NULL, Kasjer, &n_val[2]) != 0){
-               perror("Blad podczas tworzenia watku kasjera");
-               exit(EXIT_FAILURE);
+            if (aktywnosc[2] == 0) {
+               if (pthread_create(&kasjerzy[2], NULL, Kasjer, &n_val[2]) != 0){
+                  perror("Blad podczas tworzenia watku kasjera");
+                  exit(EXIT_FAILURE);
+               }
             }
             break;
          case -1: //zamykamy kase 1
@@ -260,7 +269,7 @@ int main(){
       }
 
       for (int i=0; i<3; i++){ //zamykanie watku kas, jezeli juz sa gotowe do zamkniecia
-         if (!(aktywnosc[i])) {
+         if (aktywnosc[i] == 2) {
             pthread_join(kasjerzy[i], NULL);
             aktywnosc[i] = 0;
          }

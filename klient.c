@@ -67,6 +67,7 @@ int ilosc_paragon = 0;
 struct paragon* paragon = NULL;
 int ilosc_elementow = 0;
 int paragon_wsk = 0;
+int wszedl = 0;
 
 struct st_podajnik* przestrzen_podajnik = NULL;
 struct lista_zakupow* lista = NULL;
@@ -181,31 +182,47 @@ void wiadomosc_kasjer(int n){
    struct komunikat msg;
    msg.mtype = 1;
    msg.status = n;
+   printf("Klient wysyla wiadomosc %d\n", n);
    if (msgsnd(kom_kasa, &msg, sizeof(msg) - sizeof(long), 0) == -1) {
       perror("Blad przy wysylaniu komunikatu");
       exit(EXIT_FAILURE);
    }
 }
 
-void klient_wchodzi(){
+void klient_wchodzi() {
+   wszedl = 1;
    info->liczba_klientow++;
-   if (info->liczba_klientow == 2*MAX_KLIENTOW/3){
+   printf("Stan zapelnienia: \n");
+   printf("Ilosc klientow: %d\t Czekajacy przy kasie 0: %d, 1: %d, 2: %d\n", info->liczba_klientow, info->czekajacy[0], info->czekajacy[1], info->czekajacy[2]);
+   if (info->liczba_klientow >= 2 * MAX_KLIENTOW / 3) {
       info->dlugosc_kolejki[2] = info->czekajacy[2];
-      if(!info->czekajacy[2]) wiadomosc_kasjer(3);
-   } else if (info->liczba_klientow == MAX_KLIENTOW/3) {
+      if (info->czekajacy[2] == 0) {
+         wiadomosc_kasjer(3);
+      }
+   }
+   else if (info->liczba_klientow >= MAX_KLIENTOW / 3) {
       info->dlugosc_kolejki[1] = info->czekajacy[1];
-      if(!info->czekajacy[1]) wiadomosc_kasjer(2);
+      if (info->czekajacy[1] == 0) {
+         wiadomosc_kasjer(2);
+      }
    }
 }
 
-void klient_wychodzi(){
-   int ilosc = info->liczba_klientow--;
-   if (ilosc == 2*MAX_KLIENTOW/3){
-      info->dlugosc_kolejki[2] = 99;
-      if(!info->czekajacy[2]) wiadomosc_kasjer(-3);
-   } else if (ilosc == MAX_KLIENTOW/3) {
-      info->dlugosc_kolejki[1] = 99;
-      if(!info->czekajacy[1]) wiadomosc_kasjer(-2);
+void klient_wychodzi() {
+   if (wszedl == 1) {
+      int ilosc = info->liczba_klientow--;
+      if (ilosc >= 2 * MAX_KLIENTOW / 3 && info->liczba_klientow < 2 * MAX_KLIENTOW / 3) {
+         info->dlugosc_kolejki[2] = 99;
+         if (info->czekajacy[2] == 0) {
+            wiadomosc_kasjer(-3);
+         }
+      }
+      if (ilosc >= MAX_KLIENTOW / 3 && info->liczba_klientow < MAX_KLIENTOW / 3) {
+         info->dlugosc_kolejki[1] = 99;
+         if (info->czekajacy[1] == 0) {
+            wiadomosc_kasjer(-2);
+         }
+      }
    }
 }
 
@@ -264,7 +281,7 @@ void stworz_koszyk() {
                exit(EXIT_FAILURE);
             }
             strcpy(koszyk[koszyk_wsk], przestrzen_podajnik->pieczywo);
-            printf("Klient %d odebral %s\n", getpid(), koszyk[koszyk_wsk]);
+            //printf("Klient %d odebral %s\n", getpid(), koszyk[koszyk_wsk]);
             koszyk_wsk++;
             lista->elementy[i].ilosc--;
          } else { //jezeli nie byl to ignorujemy ten produkt i przechodzimy do kolejnego
@@ -272,7 +289,7 @@ void stworz_koszyk() {
                koszyk[koszyk_wsk++] = NULL;
             }
             lista->elementy[i].ilosc = 0;
-            printf("Klient %d nie zastal produktu o indeksie %d\n", getpid(), lista->elementy[i].index);
+            //printf("Klient %d nie zastal produktu o indeksie %d\n", getpid(), lista->elementy[i].index);
          }
          sem_v(sem_podajnik, 0);
          sleep(1);
@@ -423,6 +440,7 @@ void ewakuacja(int sig){
       if (i != 0) info->dlugosc_kolejki[i] = 99;
       else info->dlugosc_kolejki[i] = 0;
    }
+   klient_wychodzi();
    sem_v(sem_podajnik, 3);
    klient_cleanup();
    exit(EXIT_SUCCESS);
@@ -463,7 +481,7 @@ int main(int argc, char** argv){
       printf("Bledna wartosc CZAS_MIN - ustawianie na default\n");
       CZAS_MIN = 5;
    }
-   printf("Podaj MIN do funkcji losujacej czas przychodzenia klienta (>=CZAS_MIN, default: CZAS_MIN w przypadku blednego inputu\n");
+   printf("Podaj MAX do funkcji losujacej czas przychodzenia klienta (>=CZAS_MIN, default: CZAS_MIN w przypadku blednego inputu\n");
    scanf("%d", &CZAS_MAX);
    if (CZAS_MAX < CZAS_MIN) {
       printf("Bledna wartosc CZAS_MIN - ustawianie na default\n");
@@ -482,7 +500,7 @@ int main(int argc, char** argv){
       printf("Pamiec dzielona %d zostala utworzona\n", pam_podajnik);
    }
    key_t key_sem_kasa = ftok(".", 'K');
-   utworz_semafor(&sem_kasa, key_sem_kasa, 15);
+   utworz_semafor(&sem_kasa, key_sem_kasa, 19);
    key_t key_pam_kasa = ftok(".", 'L');
    if ((pam_kasa = shmget(key_pam_kasa, sizeof(struct st_kasa), 0666|IPC_CREAT)) == -1) {
       perror("Blad podczas tworzenia pamieci dzielonej");
@@ -510,7 +528,7 @@ int main(int argc, char** argv){
    key_t key_sem_kier = ftok(".", 'R');
    utworz_semafor(&sem_kier, key_sem_kier, 5);
    key_t key_kom_kier = ftok(".", 'M');
-   kom_kier = msgget(key_kom_kier, IPC_CREAT | 0666);
+   kom_kier = msgget(key_kom_kier, IPC_CREAT | 0222);
    if (kom_kier == -1) {
       perror("Blad przy tworzeniu kolejki komunikatow");
       exit(EXIT_FAILURE);
@@ -548,7 +566,6 @@ int main(int argc, char** argv){
    while (running) {
    while (otwarcie) { //generowanie nowych klientow
       czekanie = los(CZAS_MIN, CZAS_MAX); //klienci przychodza w losowych momentach czasu
-      printf("Klient: Odebrano komunikat od klienta: %d\n", msg.status);
       if (process_limit() == 1) {
          pid = fork();
          switch (pid){
@@ -628,19 +645,23 @@ int main(int argc, char** argv){
                printf("Klient %d staje w kolejce przy kasie %d na miejscu %d\n", getpid(), kasa, miejsce);
                przy_kasie = 1;
                for (int i=0; i<miejsce; i++){ //czekamy w kolejce
-                  sem_p(sem_kasa, (kasa * 5) + 1); //czeka na sygnal od wychodzacego klienta
-                  sem_p(sem_kasa, (kasa * 5) + 2); //blokuje sie az wychodzacy klient wypusci wszystkich
+                  sem_p(sem_kasa, (kasa * 6) + 1); //czeka na sygnal od wychodzacego klienta
+                  sem_v(sem_kasa, (kasa * 6) + 2);
+                  sem_p(sem_kasa, (kasa * 6) + 6); //blokuje sie az wychodzacy klient wypusci wszystkich
+                  sem_v(sem_kasa, (kasa * 6) + 2);
                }
                sleep(los(1, 3));
-               odbierz_paragon(kasa * 5, kasa);
+               odbierz_paragon(kasa * 6, kasa);
                sem_p(sem_podajnik, 3);
-               for (int i=0; i<info->czekajacy[kasa]; i++){ //ruszamy kolejke
-                  sem_v(sem_kasa, (kasa * 5) + 1);
-               }
-               for (int i=0; i<info->czekajacy[kasa]; i++){ //ruszamy kolejke
-                  sem_v(sem_kasa, (kasa * 5) + 2);
-               }
                info->czekajacy[kasa]--;
+               for (int i=0; i<info->czekajacy[kasa]; i++){ //ruszamy kolejke
+                  sem_v(sem_kasa, (kasa * 6) + 1);
+                  sem_p(sem_kasa, (kasa * 6) + 2);
+               }
+               for (int i=0; i<info->czekajacy[kasa]; i++){ //ruszamy kolejke
+                  sem_v(sem_kasa, (kasa * 6) + 6);
+                  sem_p(sem_kasa, (kasa * 6) + 2);
+               }
                if (info->dlugosc_kolejki[kasa] == 99) {
                   if (info->czekajacy[kasa] == 0){
                      wiadomosc_kasjer(-(kasa + 1));//wysylamy wiadomosc do programu kasjer aby zamknac kase
