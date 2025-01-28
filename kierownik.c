@@ -321,7 +321,11 @@ int main() {
       printf("2. Inwentaryzację\n");
       printf("3. Aktualizuj zegarek\n");
       printf("4. Koniec\n");
-      scanf("%d", &wybor);
+      if (scanf("%d", &wybor) != 1) {
+         printf("Niewlasciwa opcja\n");
+         while (getchar() != '\n');
+         continue;
+      }
       switch (wybor) {
          case 1:
             ewakuacja();
