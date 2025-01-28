@@ -13,10 +13,11 @@
 #include <sys/msg.h>
 #include "semafory.h"
 
-#define GODZINA_OTWARCIA 2
-#define GODZINA_ZAMKNIECIA 22
+int GODZINA_OTWARCIA;
+int GODZINA_ZAMKNIECIA;
+
 #define ILOSC_PRODUKTOW 12
-int czas = 1200; // czas w minutach
+int czas = 360; // czas w minutach
 //piekarnia dziala w godzinach dziennych - OTWARCIE < ZAMKNIECIE
 
 const char* produkty[ILOSC_PRODUKTOW] = {
@@ -71,7 +72,7 @@ void zamknij_piekarnie() {
    kill(pid_piekarz, SIGUSR2);
    kill(pid_kasjer, SIGUSR2);
    kill(pid_klient, SIGUSR2);
-   if (inwent) {
+   if (inwent) { //jezeli zostala ogloszona inwentaryzacja - rozpoczyna komunikacje z podajnikami
       int i = 0;
       while (i < ILOSC_PRODUKTOW) {
          sem_p(sem_podajnik, 0);
@@ -151,13 +152,13 @@ void exit_handler(int sig) {
    exit(EXIT_SUCCESS);
 }
 
-void* zbieranie_pid_klientow(void* arg){
+void* zbieranie_pid_klientow(void* arg){ //tworzy tablice dynamiczna z PID klientow - dostaje je za pomoca komunikatu
    ilosc_klientow = 0;
    pid_klientow = NULL;
    struct komunikat wiad;
    int last;
    int* realloc_ptr;
-   while (run) {
+   while (run) { //wartosc dodatnia - pid do dodania, wartosc ujemna - pid do usuniecia
       sem_v(sem_kier, 0);
       while (msgrcv(kom_kier, &wiad, sizeof(wiad) - sizeof(long), 1, 0) == -1) {
          if (errno == EINTR) continue;
@@ -232,6 +233,20 @@ int main() {
    sa.sa_handler = exit_handler;
    sigaction(SIGTERM, &sa, NULL);
    sigaction(SIGINT, &sa, NULL);
+
+   printf("Czas symulacji zaczyna sie o 6:00\n");
+   printf("Podaj godzine otwarcia piekarni (0 <= GODZINA_OTWARCIA < 23, default: 8 w przypadku blednego inputu\n");
+   scanf("%d", &GODZINA_OTWARCIA);
+   if (0 > GODZINA_OTWARCIA && 23 < GODZINA_OTWARCIA) {
+      printf("Bledna wartosc GODZINA_OTWARCIA - ustawianie na default\n");
+      GODZINA_OTWARCIA = 8;
+   }
+   printf("Podaj godzine zamkniecia piekarni (GODZINA_OTWARCIA < GODZINA_ZAMKNIECIA < 24, default: 23 w przypadku blednego inputu\n");
+   scanf("%d", &GODZINA_ZAMKNIECIA);
+   if (GODZINA_OTWARCIA >= GODZINA_ZAMKNIECIA && 24 < GODZINA_ZAMKNIECIA) {
+      printf("Bledna wartosc GODZINA_ZAMKNIECIA - ustawianie na default\n");
+      GODZINA_ZAMKNIECIA = 23;
+   }
 
    key_t key_sem_kier = ftok(".", 'R');
    utworz_semafor(&sem_kier, key_sem_kier, 5);

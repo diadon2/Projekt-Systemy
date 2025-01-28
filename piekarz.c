@@ -13,7 +13,7 @@
 #include "semafory.h"
 
 #define ILOSC_PRODUKTOW 12
-#define CZAS_WYPIEKANIA 30
+int CZAS_WYPIEKANIA;
 
 struct produkt {
    char* pieczywo;
@@ -246,6 +246,12 @@ int main(int argc, char** argv){
 
    srand(time(NULL));
 
+   printf("Podaj czas wypiekania przez piekarza (>0, default: 30 w przypadku blednego inputu\n");
+   scanf("%d", &CZAS_WYPIEKANIA);
+   if (0 > CZAS_WYPIEKANIA) {
+      printf("Bledna wartosc CZAS_WYPIEKANIA - ustawianie na default\n");
+      CZAS_WYPIEKANIA = 30;
+   }
    for (int i=0; i<ILOSC_PRODUKTOW; i++){
       inicjalizacja_podajnika(i);
    }

@@ -14,7 +14,10 @@
 #include "semafory.h"
 
 #define ILOSC_PRODUKTOW 12
-#define MAX_KLIENTOW 24
+
+int MAX_KLIENTOW = 24;
+int CZAS_MIN = 5;
+int CZAS_MAX = 30;
 
 struct zakupy {
    int index;
@@ -84,6 +87,40 @@ int los(int min, int max){
    }
    return (rand() % (max - min + 1)) + min;
 }
+
+int process_limit() {
+   int ilosc_procesow = 0;
+   char buffer[128];
+   int max_procesow = 0;
+
+   FILE *ulimit_fp = popen("bash -c 'ulimit -u'", "r");
+   if (ulimit_fp == NULL) {
+      perror("popen ulimit");
+      return 0;
+   }
+
+   if (fgets(buffer, sizeof(buffer), ulimit_fp) != NULL) {
+      max_procesow = atoi(buffer);
+   }
+   pclose(ulimit_fp);
+
+   FILE *ps_fp = popen("bash -c 'ps -e | wc -l'", "r");
+   if (ps_fp == NULL) {
+      perror("popen ps");
+      return 0;
+   }
+   if (fgets(buffer, sizeof(buffer), ps_fp) != NULL) {
+      ilosc_procesow = atoi(buffer);
+   }
+   pclose(ps_fp);
+
+   if (ilosc_procesow < max_procesow) {
+      return 1;
+   } else {
+      return 0;
+   }
+}
+
 
 int wybierz_kase(int* miejsce){
    sem_p(sem_podajnik, 3);
@@ -336,12 +373,9 @@ void cleanup(){
 void* czyszczenie(void* arg){ //watek do czyszczenia procesow zombie
    while(running) {
       if (wait(NULL) == -1) {
-         if (errno == ECHILD) {
+         if (errno == ECHILD){
             sleep(1);
          }
-      } else {
-         perror("Blad podczas wait");
-         sleep(1);
       }
    }
    return NULL;
@@ -417,6 +451,25 @@ int main(int argc, char** argv){
    sa.sa_handler = otwarcie_zamykanie;
    sigaction(SIGUSR2, &sa, NULL);
 
+   printf("Podaj maksymalna dopuszczalna ilosc klientow (>0, default: 24 w przypadku blednego inputu\n");
+   scanf("%d", &MAX_KLIENTOW);
+   if (MAX_KLIENTOW <= 0) {
+      printf("Bledna wartosc MAX_KLIENTOW - ustawianie na default\n");
+      MAX_KLIENTOW = 24;
+   }
+   printf("Podaj MIN do funkcji losujacej czas przychodzenia klienta (>0, default: 5 w przypadku blednego inputu\n");
+   scanf("%d", &CZAS_MIN);
+   if (CZAS_MIN <= 0) {
+      printf("Bledna wartosc CZAS_MIN - ustawianie na default\n");
+      CZAS_MIN = 5;
+   }
+   printf("Podaj MIN do funkcji losujacej czas przychodzenia klienta (>=CZAS_MIN, default: CZAS_MIN w przypadku blednego inputu\n");
+   scanf("%d", &CZAS_MAX);
+   if (CZAS_MAX < CZAS_MIN) {
+      printf("Bledna wartosc CZAS_MIN - ustawianie na default\n");
+      CZAS_MAX = CZAS_MIN;
+   }
+
    srand(time(NULL));
    key_t key_sem_podajnik = ftok(".", 'P');
    utworz_semafor(&sem_podajnik, key_sem_podajnik, 4);
@@ -439,7 +492,7 @@ int main(int argc, char** argv){
       printf("Pamiec dzielona %d zostala utworzona\n", pam_kasa);
    }
    key_t key_kom_kasa = ftok(".", 'Q');
-   kom_kasa = msgget(key_kom_kasa, IPC_CREAT | 0666);
+   kom_kasa = msgget(key_kom_kasa, IPC_CREAT | 0222);
    if (kom_kasa == -1) {
       perror("Blad przy tworzeniu kolejki komunikatow");
       exit(EXIT_FAILURE);
@@ -494,120 +547,122 @@ int main(int argc, char** argv){
 
    while (running) {
    while (otwarcie) { //generowanie nowych klientow
-      czekanie = los(1, 30); //klienci przychodza w losowych momentach czasu
+      czekanie = los(CZAS_MIN, CZAS_MAX); //klienci przychodza w losowych momentach czasu
       printf("Klient: Odebrano komunikat od klienta: %d\n", msg.status);
-      pid = fork();
-      switch (pid){
-         case -1:
-            perror("Blad podczas tworzenia procesu za pomoca fork");
-            exit(EXIT_FAILURE);
-         case 0:
-            //Proces potomny - klient przychodzi do piekarni
-            sem_p(sem_kier, 0);
-            msg.mtype = 1;
-            msg.status = getpid(); //wiadomosc dla kierownika
-            if (msgsnd(kom_kier, &msg, sizeof(msg) - sizeof(long), 0) == -1) {
-               perror("Blad przy wysylaniu komunikatu");
+      if (process_limit() == 1) {
+         pid = fork();
+         switch (pid){
+            case -1:
+               perror("Blad podczas tworzenia procesu za pomoca fork");
                exit(EXIT_FAILURE);
-            }
-            signal(SIGINT, exit_handler_klient);
-            signal(SIGTERM, exit_handler_klient);
-            signal(SIGUSR1, ewakuacja);
-            signal(SIGUSR2, zamykanie_klient);
-            struct sigaction sa;
-            sa.sa_flags = 0;
-            sa.sa_handler = exit_handler_klient;
-            sigaction(SIGTERM, &sa, NULL);
-            sigaction(SIGINT, &sa, NULL);
-            sa.sa_handler = zamykanie_klient;
-            sigaction(SIGUSR2, &sa, NULL);
-            sa.sa_handler = ewakuacja;
-            sigaction(SIGUSR1, &sa, NULL);
-            while (running) { //jezeli piekarnia osiagnela limit klientow, czeka przed piekarnia
-               sem_p(sem_podajnik, 3);
-               if (info->liczba_klientow < MAX_KLIENTOW) {
-                  klient_wchodzi();
+            case 0:
+                  //Proces potomny - klient przychodzi do piekarni
+               sem_p(sem_kier, 0);
+               msg.mtype = 1;
+               msg.status = getpid(); //wiadomosc dla kierownika
+               if (msgsnd(kom_kier, &msg, sizeof(msg) - sizeof(long), 0) == -1) {
+                  perror("Blad przy wysylaniu komunikatu");
+                  exit(EXIT_FAILURE);
+               }
+               signal(SIGINT, exit_handler_klient);
+               signal(SIGTERM, exit_handler_klient);
+               signal(SIGUSR1, ewakuacja);
+               signal(SIGUSR2, zamykanie_klient);
+               struct sigaction sa;
+               sa.sa_flags = 0;
+               sa.sa_handler = exit_handler_klient;
+               sigaction(SIGTERM, &sa, NULL);
+               sigaction(SIGINT, &sa, NULL);
+               sa.sa_handler = zamykanie_klient;
+               sigaction(SIGUSR2, &sa, NULL);
+               sa.sa_handler = ewakuacja;
+               sigaction(SIGUSR1, &sa, NULL);
+               while (running) { //jezeli piekarnia osiagnela limit klientow, czeka przed piekarnia
+                  sem_p(sem_podajnik, 3);
+                  if (info->liczba_klientow < MAX_KLIENTOW) {
+                     klient_wchodzi();
+                     sem_v(sem_podajnik, 3);
+                     break;
+                  }
                   sem_v(sem_podajnik, 3);
-                  break;
+                  sleep(1);
                }
+               printf("Klient %d rozpoczyna dzialanie\n", getpid());
+
+               //inicjalizacja klienta
+               przestrzen_podajnik = (struct st_podajnik*)shmat(pam_podajnik, NULL, 0);
+               if (przestrzen_podajnik == (struct st_podajnik*)(-1)){
+                  perror("Blad podczas przydzielania adresu dla pamieci");
+                  klient_cleanup();
+                  exit(EXIT_FAILURE);
+               }
+               else {
+                  printf("Przestrzen adresowa zostala przyznana dla %d\n", pam_podajnik);
+               }
+               przestrzen_kasa = (struct st_kasa*)shmat(pam_kasa, NULL, 0);
+               if (przestrzen_kasa == (struct st_kasa*)(-1)){
+                  perror("Blad podczas przydzielania adresu dla kolejki");
+                  klient_cleanup();
+                  exit(EXIT_FAILURE);
+               }
+               else {
+                  printf("Przestrzen adresowa zostala przyznana dla %d\n", pam_kasa);
+               }
+               //generowanie listy zakupow
+               lista = stworz_liste_zakupow();
+               printf("Lista zakupow dla klienta %d :\n", getpid());
+               for (int i=0; i<lista->dlugosc; i++){
+                  printf("%d sztuk produktu %d\n", lista->elementy[i].ilosc, lista->elementy[i].index);
+                  ilosc_elementow = ilosc_elementow + lista->elementy[i].ilosc;
+               }
+
+               //tworzenie koszyka - miejsce przechowywania odebranych produktow
+               stworz_koszyk();
+
+               sleep(los(5, 10));
+               int miejsce;
+               int kasa = wybierz_kase(&miejsce);
+               sem_p(sem_podajnik, 3);
+               info->czekajacy[kasa]++;
                sem_v(sem_podajnik, 3);
-               sleep(1);
-            }
-            printf("Klient %d rozpoczyna dzialanie\n", getpid());
-
-            //inicjalizacja klienta
-            przestrzen_podajnik = (struct st_podajnik*)shmat(pam_podajnik, NULL, 0);
-            if (przestrzen_podajnik == (struct st_podajnik*)(-1)){
-               perror("Blad podczas przydzielania adresu dla pamieci");
-               klient_cleanup();
-               exit(EXIT_FAILURE);
-            }
-            else {
-               printf("Przestrzen adresowa zostala przyznana dla %d\n", pam_podajnik);
-            }
-            przestrzen_kasa = (struct st_kasa*)shmat(pam_kasa, NULL, 0);
-            if (przestrzen_kasa == (struct st_kasa*)(-1)){
-               perror("Blad podczas przydzielania adresu dla kolejki");
-               klient_cleanup();
-               exit(EXIT_FAILURE);
-            }
-            else {
-               printf("Przestrzen adresowa zostala przyznana dla %d\n", pam_kasa);
-            }
-            //generowanie listy zakupow
-            lista = stworz_liste_zakupow();
-            printf("Lista zakupow dla klienta %d :\n", getpid());
-            for (int i=0; i<lista->dlugosc; i++){
-               printf("%d sztuk produktu %d\n", lista->elementy[i].ilosc, lista->elementy[i].index);
-               ilosc_elementow = ilosc_elementow + lista->elementy[i].ilosc;
-            }
-
-            //tworzenie koszyka - miejsce przechowywania odebranych produktow
-            stworz_koszyk();
-
-            sleep(los(5, 10));
-            int miejsce;
-            int kasa = wybierz_kase(&miejsce);
-            sem_p(sem_podajnik, 3);
-            info->czekajacy[kasa]++;
-            sem_v(sem_podajnik, 3);
-            printf("Klient %d staje w kolejce przy kasie %d na miejscu %d\n", getpid(), kasa, miejsce);
-            przy_kasie = 1;
-            for (int i=0; i<miejsce; i++){ //czekamy w kolejce
-               sem_p(sem_kasa, (kasa * 5) + 1); //czeka na sygnal od wychodzacego klienta
-               sem_p(sem_kasa, (kasa * 5) + 2); //blokuje sie az wychodzacy klient wypusci wszystkich
-            }
-            sleep(los(1, 3));
-            odbierz_paragon(kasa * 5, kasa);
-            sem_p(sem_podajnik, 3);
-            for (int i=0; i<info->czekajacy[kasa]; i++){ //ruszamy kolejke
-               sem_v(sem_kasa, (kasa * 5) + 1);
-            }
-            for (int i=0; i<info->czekajacy[kasa]; i++){ //ruszamy kolejke
-               sem_v(sem_kasa, (kasa * 5) + 2);
-            }
-            info->czekajacy[kasa]--;
-            if (info->dlugosc_kolejki[kasa] == 99) {
-               if (info->czekajacy[kasa] == 0){
-                  wiadomosc_kasjer(-(kasa + 1));//wysylamy wiadomosc do programu kasjer aby zamknac kase
+               printf("Klient %d staje w kolejce przy kasie %d na miejscu %d\n", getpid(), kasa, miejsce);
+               przy_kasie = 1;
+               for (int i=0; i<miejsce; i++){ //czekamy w kolejce
+                  sem_p(sem_kasa, (kasa * 5) + 1); //czeka na sygnal od wychodzacego klienta
+                  sem_p(sem_kasa, (kasa * 5) + 2); //blokuje sie az wychodzacy klient wypusci wszystkich
                }
-            } else info->dlugosc_kolejki[kasa]--;
-            sem_v(sem_podajnik, 3);
-            printf("Klient %d otrzymal paragon:\n", getpid());
-            for(int i=0; i<ilosc_paragon; i++){
-               printf("%d sztuk %s, koszt %d\n", paragon[i].ilosc, paragon[i].produkt, paragon[i].cena);
-            }
-            //klient wychodzi ze sklepu
-            sleep(los(5, 10));
-            sem_p(sem_podajnik, 3);
-            klient_wychodzi();
-            sem_v(sem_podajnik, 3);
+               sleep(los(1, 3));
+               odbierz_paragon(kasa * 5, kasa);
+               sem_p(sem_podajnik, 3);
+               for (int i=0; i<info->czekajacy[kasa]; i++){ //ruszamy kolejke
+                  sem_v(sem_kasa, (kasa * 5) + 1);
+               }
+               for (int i=0; i<info->czekajacy[kasa]; i++){ //ruszamy kolejke
+                  sem_v(sem_kasa, (kasa * 5) + 2);
+               }
+               info->czekajacy[kasa]--;
+               if (info->dlugosc_kolejki[kasa] == 99) {
+                  if (info->czekajacy[kasa] == 0){
+                     wiadomosc_kasjer(-(kasa + 1));//wysylamy wiadomosc do programu kasjer aby zamknac kase
+                  }
+               } else info->dlugosc_kolejki[kasa]--;
+               sem_v(sem_podajnik, 3);
+               printf("Klient %d otrzymal paragon:\n", getpid());
+               for(int i=0; i<ilosc_paragon; i++){
+                  printf("%d sztuk %s, koszt %d\n", paragon[i].ilosc, paragon[i].produkt, paragon[i].cena);
+               }
+               //klient wychodzi ze sklepu
+               sleep(los(5, 10));
+               sem_p(sem_podajnik, 3);
+               klient_wychodzi();
+               sem_v(sem_podajnik, 3);
 
-            klient_cleanup();
-            exit(EXIT_SUCCESS);
-         default:
-            sleep(czekanie);
-            break;
+               klient_cleanup();
+               exit(EXIT_SUCCESS);
+            default:
+               sleep(czekanie);
+               break;
+         }
       }
    }
    sleep(1);

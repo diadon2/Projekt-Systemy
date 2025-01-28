@@ -14,7 +14,6 @@
 #include "semafory.h"
 
 #define ILOSC_PRODUKTOW 12
-#define MAX_KLIENTOW 24
 
 const char* produkty[ILOSC_PRODUKTOW] = {
       "Chleb pszenny", "Chleb zytni", "Chleb razowy", "Chleb wieloziarnisty",
@@ -189,7 +188,7 @@ int main(){
       printf("Przestrzen adresowa zostala przyznana dla %d\n", pam_kasa);
    }
    key_t key_kom_kasa = ftok(".", 'Q');
-   kom_kasa = msgget(key_kom_kasa, IPC_CREAT | 0666);
+   kom_kasa = msgget(key_kom_kasa, IPC_CREAT | 0444);
    if (kom_kasa == -1) {
       perror("Blad przy tworzeniu kolejki komunikatow");
       exit(EXIT_FAILURE);
